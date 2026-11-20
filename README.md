@@ -20,6 +20,23 @@ BluetoothMotorCube/
 详细接线、命令和调参方法见
 [BluetoothMotorCube/README.md](BluetoothMotorCube/README.md)。
 
+## PC 上位机
+
+```text
+UpperControl/
+```
+
+PySide6 写的电脑端遥控程序：虚拟摇杆做平面 360° 平移，键盘 Q/E 做
+原地自转，两者可同时操作。带四轮 PWM 预测、ack 门控发送和超时保护。
+无硬件时可用 `--simulate` 跑模拟器。
+
+安装、操作和调参见 [UpperControl/README.md](UpperControl/README.md)。
+
+```powershell
+cd UpperControl
+.\run.bat --simulate
+```
+
 编译：
 
 ```powershell
