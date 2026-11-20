@@ -44,13 +44,19 @@ typedef struct
 /* USER CODE BEGIN PD */
 #define PWM_MAX_VALUE          399
 #define PWM_MIN_RUN            60
-#define PWM_RAMP_STEP          25
+#define PWM_RAMP_UP_STEP       20
+#define PWM_RAMP_DOWN_STEP     30
 #define CONTROL_PERIOD_MS      10U
 #define MOTION_TIMEOUT_MS      1200U
-#define DEFAULT_SPEED_PERCENT  35U
-#define MIN_SPEED_PERCENT      20U
-#define MAX_SPEED_PERCENT      100U
-#define SPEED_STEP_PERCENT     10U
+/*
+ * Single-key bench test speed. Kept equal to the old effective value
+ * (100 * 35%) so the behaviour already validated on the bench is
+ * preserved now that the hidden 35% scaling is gone.
+ * Diagonal keys use 71% per axis, which is the 45 degree unit vector,
+ * so all manual keys produce the same translational magnitude.
+ */
+#define MANUAL_TEST_SPEED      35
+#define MANUAL_DIAG_SPEED      25
 #define VECTOR_BUFFER_SIZE     28U
 
 /* USER CODE END PD */
@@ -81,7 +87,6 @@ static int16_t motion_vy;
 static int16_t motion_wz;
 static uint8_t motion_active;
 static uint32_t motion_deadline;
-static uint8_t speed_percent = DEFAULT_SPEED_PERCENT;
 static uint32_t last_control_tick;
 
 static uint8_t vector_collecting;
@@ -153,7 +158,7 @@ int main(void)
 
   uart_puts("MECANUM X READY\r\n");
   uart_puts("F/B/L/R=move Q/E=rotate S=stop\r\n");
-  uart_puts("G/I/H/J=diagonal +=speed -=speed\r\n");
+  uart_puts("G/I/H/J=diagonal\r\n");
   uart_puts("V,fwd,right,ccw<ENTER>=vector -100..100\r\n");
   /* USER CODE END 2 */
 
@@ -161,7 +166,13 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if (HAL_UART_Receive(&huart1, &rx_byte, 1, 2) == HAL_OK)
+    /*
+     * A finite timeout is essential here, not just for responsiveness:
+     * HAL only clears a latched overrun (ORE) from inside the timeout
+     * path of UART_WaitOnFlagUntilTimeout. With HAL_MAX_DELAY a single
+     * overrun would leave the receiver stuck forever.
+     */
+    if (HAL_UART_Receive(&huart1, &rx_byte, 1, 1) == HAL_OK)
     {
       process_command(rx_byte);
     }
@@ -179,6 +190,10 @@ int main(void)
       motion_vx = 0;
       motion_vy = 0;
       motion_wz = 0;
+      /*
+       * Coast to a stop through the ramp instead of cutting the PWM
+       * instantly, so a dropped link does not slam the gearbox.
+       */
       set_motion(0, 0, 0);
       uart_puts("STOP timeout\r\n");
     }
@@ -440,6 +455,7 @@ static void motors_ramp(void)
   uint8_t index;
   int16_t current;
   int16_t target;
+  int16_t step;
 
   for (index = 0U; index < 4U; index++)
   {
@@ -449,24 +465,40 @@ static void motors_ramp(void)
     if (((current < 0) && (target > 0)) ||
         ((current > 0) && (target < 0)))
     {
-      if (abs_i32(current) <= PWM_RAMP_STEP)
+      /*
+       * Never cross zero in one step: a direction reversal must pass
+       * through a full stop so the H-bridge is not stressed and the
+       * gearbox is not shocked.
+       */
+      if (abs_i32(current) <= PWM_RAMP_DOWN_STEP)
       {
         current = 0;
       }
       else
       {
-        current += (current > 0) ? -PWM_RAMP_STEP : PWM_RAMP_STEP;
+        current += (current > 0) ? -PWM_RAMP_DOWN_STEP : PWM_RAMP_DOWN_STEP;
       }
     }
-    else if (current < target)
+    else
     {
-      current = (int16_t)((target - current > PWM_RAMP_STEP)
-                          ? current + PWM_RAMP_STEP : target);
-    }
-    else if (current > target)
-    {
-      current = (int16_t)((current - target > PWM_RAMP_STEP)
-                          ? current - PWM_RAMP_STEP : target);
+      /*
+       * Asymmetric ramp: accelerate quickly enough to stay responsive
+       * at 60 Hz command rate, decelerate faster so releasing the stick
+       * feels immediate.
+       */
+      step = (abs_i32(target) > abs_i32(current)) ? PWM_RAMP_UP_STEP
+                                                 : PWM_RAMP_DOWN_STEP;
+
+      if (current < target)
+      {
+        current = (int16_t)((target - current > step)
+                            ? current + step : target);
+      }
+      else if (current > target)
+      {
+        current = (int16_t)((current - target > step)
+                            ? current - step : target);
+      }
     }
 
     if (current != motors[index].current_pwm)
@@ -488,9 +520,12 @@ static void set_motion(int16_t vx, int16_t vy, int16_t wz)
   motion_vy = vy;
   motion_wz = wz;
 
-  vx = (int16_t)((int32_t)vx * speed_percent / 100);
-  vy = (int16_t)((int32_t)vy * speed_percent / 100);
-  wz = (int16_t)((int32_t)wz * speed_percent / 100);
+  /*
+   * vx, vy and wz are the final normalised targets in -100..100.
+   * The MCU only clamps, normalises the four wheels and applies trim;
+   * it must not scale them again, otherwise the host speed slider
+   * becomes meaningless (the old code multiplied by a hidden 35%).
+   */
 
   /*
    * Standard X mecanum layout:
@@ -549,6 +584,23 @@ static void start_motion(int16_t vx, int16_t vy, int16_t wz)
   motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
 }
 
+/*
+ * Two distinct stop semantics on purpose:
+ *
+ *   V,0,0,0  -> soft stop. Target becomes zero and the ramp coasts the
+ *               wheels down, which is what a released stick should do.
+ *   S        -> hard stop. PWM is cut immediately and the ramp state is
+ *               reset, for the emergency button and for link loss.
+ */
+static void hard_stop(void)
+{
+  motion_active = 0U;
+  motion_vx = 0;
+  motion_vy = 0;
+  motion_wz = 0;
+  motors_hard_stop();
+}
+
 static void process_command(uint8_t byte)
 {
   uint8_t command;
@@ -577,16 +629,16 @@ static void process_command(uint8_t byte)
 
   switch (command)
   {
-    case 'F': start_motion(100, 0, 0);    uart_puts("F\r\n"); break;
-    case 'B': start_motion(-100, 0, 0);   uart_puts("B\r\n"); break;
-    case 'L': start_motion(0, -100, 0);   uart_puts("L\r\n"); break;
-    case 'R': start_motion(0, 100, 0);    uart_puts("R\r\n"); break;
-    case 'Q': start_motion(0, 0, 100);    uart_puts("Q\r\n"); break;
-    case 'E': start_motion(0, 0, -100);   uart_puts("E\r\n"); break;
-    case 'G': start_motion(71, -71, 0);   uart_puts("FL\r\n"); break;
-    case 'I': start_motion(71, 71, 0);    uart_puts("FR\r\n"); break;
-    case 'H': start_motion(-71, -71, 0);  uart_puts("BL\r\n"); break;
-    case 'J': start_motion(-71, 71, 0);   uart_puts("BR\r\n"); break;
+    case 'F': start_motion(MANUAL_TEST_SPEED, 0, 0);                    uart_puts("F\r\n"); break;
+    case 'B': start_motion(-MANUAL_TEST_SPEED, 0, 0);                   uart_puts("B\r\n"); break;
+    case 'L': start_motion(0, -MANUAL_TEST_SPEED, 0);                   uart_puts("L\r\n"); break;
+    case 'R': start_motion(0, MANUAL_TEST_SPEED, 0);                    uart_puts("R\r\n"); break;
+    case 'Q': start_motion(0, 0, MANUAL_TEST_SPEED);                    uart_puts("Q\r\n"); break;
+    case 'E': start_motion(0, 0, -MANUAL_TEST_SPEED);                   uart_puts("E\r\n"); break;
+    case 'G': start_motion(MANUAL_DIAG_SPEED, -MANUAL_DIAG_SPEED, 0);   uart_puts("FL\r\n"); break;
+    case 'I': start_motion(MANUAL_DIAG_SPEED, MANUAL_DIAG_SPEED, 0);    uart_puts("FR\r\n"); break;
+    case 'H': start_motion(-MANUAL_DIAG_SPEED, -MANUAL_DIAG_SPEED, 0);  uart_puts("BL\r\n"); break;
+    case 'J': start_motion(-MANUAL_DIAG_SPEED, MANUAL_DIAG_SPEED, 0);   uart_puts("BR\r\n"); break;
     case 'K':
       if (motion_active != 0U)
       {
@@ -594,44 +646,8 @@ static void process_command(uint8_t byte)
       }
       break;
     case 'S':
-      motion_active = 0U;
-      motion_vx = 0;
-      motion_vy = 0;
-      motion_wz = 0;
-      motors_hard_stop();
+      hard_stop();
       uart_puts("STOP\r\n");
-      break;
-    case '+':
-      if (speed_percent < MAX_SPEED_PERCENT)
-      {
-        speed_percent = (uint8_t)(speed_percent + SPEED_STEP_PERCENT);
-        if (speed_percent > MAX_SPEED_PERCENT)
-        {
-          speed_percent = MAX_SPEED_PERCENT;
-        }
-      }
-      if (motion_active != 0U)
-      {
-        set_motion(motion_vx, motion_vy, motion_wz);
-        motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
-      }
-      uart_puts((speed_percent == 100U) ? "SPD=100\r\n" : "SPD+\r\n");
-      break;
-    case '-':
-      if (speed_percent > MIN_SPEED_PERCENT)
-      {
-        speed_percent = (uint8_t)(speed_percent - SPEED_STEP_PERCENT);
-        if (speed_percent < MIN_SPEED_PERCENT)
-        {
-          speed_percent = MIN_SPEED_PERCENT;
-        }
-      }
-      if (motion_active != 0U)
-      {
-        set_motion(motion_vx, motion_vy, motion_wz);
-        motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
-      }
-      uart_puts((speed_percent == 20U) ? "SPD=20\r\n" : "SPD-\r\n");
       break;
     case 'V':
       vector_length = 0U;
@@ -697,6 +713,20 @@ static void process_vector(void)
       (parse_int16(&cursor, &wz) == 0U))
   {
     uart_puts("ERR V,fwd,right,ccw\r\n");
+    return;
+  }
+
+  if ((vx == 0) && (vy == 0) && (wz == 0))
+  {
+    /*
+     * An all-zero vector means "the stick is centred". Setting the
+     * target to zero lets the ramp coast down; clearing motion_active
+     * disarms the timeout so no STOP timeout is printed while the
+     * wheels are still decelerating.
+     */
+    motion_active = 0U;
+    set_motion(0, 0, 0);
+    uart_puts("V OK\r\n");
     return;
   }
 
