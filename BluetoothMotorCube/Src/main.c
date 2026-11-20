@@ -445,7 +445,19 @@ static void motors_ramp(void)
     current = motors[index].current_pwm;
     target = target_pwm[index];
 
-    if (current < target)
+    if (((current < 0) && (target > 0)) ||
+        ((current > 0) && (target < 0)))
+    {
+      if (abs_i32(current) <= PWM_RAMP_STEP)
+      {
+        current = 0;
+      }
+      else
+      {
+        current += (current > 0) ? -PWM_RAMP_STEP : PWM_RAMP_STEP;
+      }
+    }
+    else if (current < target)
     {
       current = (int16_t)((target - current > PWM_RAMP_STEP)
                           ? current + PWM_RAMP_STEP : target);
