@@ -208,16 +208,6 @@ class Joystick(QWidget):
         painter.setBrush(knob_colour.darker(180))
         painter.drawEllipse(knob, 17, 17)
 
-        # Hint text.
-        painter.setPen(QPen(TEXT_DIM))
-        painter.setFont(ui_font(8))
-        hint = "已锁定" if self._locked else "按住拖动驾驶"
-        painter.drawText(
-            QRectF(0, self.height() - 22, self.width(), 18),
-            Qt.AlignmentFlag.AlignCenter,
-            hint,
-        )
-
     def _draw_label(
         self,
         painter: QPainter,

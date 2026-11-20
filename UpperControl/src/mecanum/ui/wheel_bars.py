@@ -120,5 +120,5 @@ class WheelBars(QWidget):
             painter.drawText(
                 QRectF(0, self.height() - 18, self.width(), 16),
                 Qt.AlignmentFlag.AlignLeft,
-                f"归一化损失 {self._loss * 100:.0f}%（旋转正在抵消平移速度）",
+                f"归一化损失 {self._loss * 100:.0f}%",
             )

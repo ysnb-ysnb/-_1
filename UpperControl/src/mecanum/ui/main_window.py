@@ -133,14 +133,6 @@ class MainWindow(QMainWindow):
         row2.addStretch(1)
         outer.addLayout(row2)
 
-        hint = QLabel(
-            "蓝牙串口配对后会生成两个 COM 口，只有出站口能用。"
-            "列表中带「蓝牙」标记的是蓝牙口，连不上就换另一个试。"
-        )
-        hint.setWordWrap(True)
-        hint.setProperty("role", "dim")
-        outer.addWidget(hint)
-
         return box
 
     def _build_drive_panel(self) -> QGroupBox:
@@ -218,7 +210,7 @@ class MainWindow(QMainWindow):
         return value
 
     def _build_wheels_panel(self) -> QGroupBox:
-        box = QGroupBox("四轮 PWM（预测）")
+        box = QGroupBox("四轮 PWM")
         layout = QVBoxLayout(box)
         self._wheels = WheelBars()
         layout.addWidget(self._wheels)
