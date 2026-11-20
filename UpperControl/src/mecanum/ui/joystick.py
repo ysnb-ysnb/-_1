@@ -17,6 +17,35 @@ from PySide6.QtWidgets import QWidget
 from .theme import ACCENT, BORDER, DANGER, PANEL, PANEL_ALT, TEXT_DIM, ui_font
 
 
+def command_tip(
+    centre: QPointF,
+    radius: float,
+    forward: int,
+    right: int,
+    full_scale: int = 100,
+) -> QPointF | None:
+    """Screen point for the command arrow tip, or None when stopped.
+
+    Computed straight from the command components instead of through an
+    angle, because the previous atan2 version negated ``forward`` and then
+    negated it again in the y term, so the arrow pointed below the centre
+    while the chassis drove forward.
+
+    Body axes are upward-positive for ``forward`` and rightward-positive
+    for ``right``; screen y grows downward, so forward subtracts.
+    """
+    magnitude = math.hypot(forward, right)
+    if magnitude <= 0.0:
+        return None
+
+    length = min(magnitude / full_scale, 1.0) * radius
+    scale = length / magnitude
+    return QPointF(
+        centre.x() + right * scale,
+        centre.y() - forward * scale,
+    )
+
+
 class Joystick(QWidget):
     """Circular stick emitting normalised (x, y) with +y downward."""
 
@@ -166,15 +195,8 @@ class Joystick(QWidget):
 
         # Command vector, which may differ from the pointer once shaping and
         # filtering are applied.
-        fwd, right, _ccw = self._command
-        magnitude = math.hypot(fwd, right)
-        if magnitude > 0.0:
-            scale = min(magnitude / 100.0, 1.0) * radius
-            angle = math.atan2(-fwd, right)
-            tip = QPointF(
-                centre.x() + math.cos(angle) * scale,
-                centre.y() - math.sin(angle) * scale,
-            )
+        tip = command_tip(centre, radius, self._command[0], self._command[1])
+        if tip is not None:
             painter.setPen(QPen(ACCENT, 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
             painter.drawLine(centre, tip)
 

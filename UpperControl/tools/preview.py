@@ -27,9 +27,10 @@ def main() -> int:
     window._sim_check.setChecked(True)
     window._connect()
 
-    # Drive diagonally with rotation so the readouts are populated.
-    window._on_stick_moved(-0.55, -0.62)
-    window._rotation_slider = 0.45
+    # Push up and to the right, the case from the bug report, so the arrow
+    # can be checked against the knob position.
+    window._on_stick_moved(0.55, -0.62)
+    window._rotation_slider = 0.0
     for _ in range(45):
         window._tick()
 
