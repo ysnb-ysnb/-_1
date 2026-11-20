@@ -68,9 +68,10 @@ UART_HandleTypeDef huart1;
 /* USER CODE BEGIN PV */
 static MotorConfig_t motors[4] =
 {
+  /* Order must match wheel[] in set_motion: FL, FR, RL, RR. */
   {GPIOB, GPIO_PIN_12, GPIOB, GPIO_PIN_13, TIM_CHANNEL_1, 100, 0, 0},
-  {GPIOB, GPIO_PIN_14, GPIOB, GPIO_PIN_15, TIM_CHANNEL_2, 100, 0, 0},
   {GPIOA, GPIO_PIN_0,  GPIOA, GPIO_PIN_1,  TIM_CHANNEL_3, 100, 0, 0},
+  {GPIOB, GPIO_PIN_14, GPIOB, GPIO_PIN_15, TIM_CHANNEL_2, 100, 0, 0},
   {GPIOA, GPIO_PIN_2,  GPIOA, GPIO_PIN_3,  TIM_CHANNEL_4, 100, 0, 0}
 };
 
