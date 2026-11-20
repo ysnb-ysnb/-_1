@@ -26,11 +26,32 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
+typedef struct
+{
+  GPIO_TypeDef *in1_port;
+  uint16_t in1_pin;
+  GPIO_TypeDef *in2_port;
+  uint16_t in2_pin;
+  uint32_t pwm_channel;
+  int16_t trim_percent;
+  uint8_t inverted;
+  int16_t current_pwm;
+} MotorConfig_t;
 
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
+#define PWM_MAX_VALUE          399
+#define PWM_MIN_RUN            60
+#define PWM_RAMP_STEP          25
+#define CONTROL_PERIOD_MS      10U
+#define MOTION_TIMEOUT_MS      1200U
+#define DEFAULT_SPEED_PERCENT  35U
+#define MIN_SPEED_PERCENT      20U
+#define MAX_SPEED_PERCENT      100U
+#define SPEED_STEP_PERCENT     10U
+#define VECTOR_BUFFER_SIZE     28U
 
 /* USER CODE END PD */
 
@@ -45,8 +66,26 @@ TIM_HandleTypeDef htim4;
 UART_HandleTypeDef huart1;
 
 /* USER CODE BEGIN PV */
-static uint32_t motor_start_tick;
-static uint8_t motor_is_running;
+static MotorConfig_t motors[4] =
+{
+  {GPIOB, GPIO_PIN_12, GPIOB, GPIO_PIN_13, TIM_CHANNEL_1, 100, 0, 0},
+  {GPIOB, GPIO_PIN_14, GPIOB, GPIO_PIN_15, TIM_CHANNEL_2, 100, 0, 0},
+  {GPIOA, GPIO_PIN_0,  GPIOA, GPIO_PIN_1,  TIM_CHANNEL_3, 100, 0, 0},
+  {GPIOA, GPIO_PIN_2,  GPIOA, GPIO_PIN_3,  TIM_CHANNEL_4, 100, 0, 0}
+};
+
+static int16_t target_pwm[4];
+static int16_t motion_vx;
+static int16_t motion_vy;
+static int16_t motion_wz;
+static uint8_t motion_active;
+static uint32_t motion_deadline;
+static uint8_t speed_percent = DEFAULT_SPEED_PERCENT;
+static uint32_t last_control_tick;
+
+static uint8_t vector_collecting;
+static uint8_t vector_length;
+static char vector_buffer[VECTOR_BUFFER_SIZE];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -56,9 +95,15 @@ static void MX_TIM4_Init(void);
 static void MX_USART1_UART_Init(void);
 /* USER CODE BEGIN PFP */
 static void uart_puts(const char *text);
-static void motor_stop(void);
-static void motor_forward(void);
-static void motor_reverse(void);
+static int32_t abs_i32(int32_t value);
+static void motors_hard_stop(void);
+static void motor_output(MotorConfig_t *motor, int16_t pwm);
+static void motors_ramp(void);
+static void set_motion(int16_t vx, int16_t vy, int16_t wz);
+static void start_motion(int16_t vx, int16_t vy, int16_t wz);
+static void process_command(uint8_t byte);
+static void process_vector(void);
+static uint8_t parse_int16(const char **cursor, int16_t *value);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -99,42 +144,42 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
   HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_1);
-  motor_stop();
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_2);
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_3);
+  HAL_TIM_PWM_Start(&htim4, TIM_CHANNEL_4);
+  motors_hard_stop();
+  last_control_tick = HAL_GetTick();
 
-  uart_puts("LEFT FRONT MOTOR TEST\r\n");
-  uart_puts("F=forward 25% 1.5s\r\n");
-  uart_puts("B=reverse 25% 1.5s\r\n");
-  uart_puts("S=stop\r\n");
+  uart_puts("MECANUM X READY\r\n");
+  uart_puts("F/B/L/R=move Q/E=rotate S=stop\r\n");
+  uart_puts("G/I/H/J=diagonal +=speed -=speed\r\n");
+  uart_puts("V,fwd,right,ccw<ENTER>=vector -100..100\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    if (HAL_UART_Receive(&huart1, &rx_byte, 1, 5) == HAL_OK)
+    if (HAL_UART_Receive(&huart1, &rx_byte, 1, 2) == HAL_OK)
     {
-      if ((rx_byte == 'F') || (rx_byte == 'f'))
-      {
-        motor_forward();
-        uart_puts("LEFT_FRONT FORWARD 25% 1.5s\r\n");
-      }
-      else if ((rx_byte == 'B') || (rx_byte == 'b'))
-      {
-        motor_reverse();
-        uart_puts("LEFT_FRONT REVERSE 25% 1.5s\r\n");
-      }
-      else if ((rx_byte == 'S') || (rx_byte == 's'))
-      {
-        motor_stop();
-        uart_puts("LEFT_FRONT STOP\r\n");
-      }
+      process_command(rx_byte);
     }
 
-    if (motor_is_running &&
-        ((HAL_GetTick() - motor_start_tick) >= 1500U))
+    if ((HAL_GetTick() - last_control_tick) >= CONTROL_PERIOD_MS)
     {
-      motor_stop();
-      uart_puts("LEFT_FRONT STOP\r\n");
+      last_control_tick = HAL_GetTick();
+      motors_ramp();
+    }
+
+    if (motion_active &&
+        ((int32_t)(HAL_GetTick() - motion_deadline) >= 0))
+    {
+      motion_active = 0;
+      motion_vx = 0;
+      motion_vy = 0;
+      motion_wz = 0;
+      set_motion(0, 0, 0);
+      uart_puts("STOP timeout\r\n");
     }
 
     /* USER CODE END WHILE */
@@ -232,6 +277,18 @@ static void MX_TIM4_Init(void)
   {
     Error_Handler();
   }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_ConfigChannel(&htim4, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
   /* USER CODE BEGIN TIM4_Init 2 */
 
   /* USER CODE END TIM4_Init 2 */
@@ -285,14 +342,24 @@ static void MX_GPIO_Init(void)
   /* USER CODE END MX_GPIO_Init_1 */
 
   /* GPIO Ports Clock Enable */
-  __HAL_RCC_GPIOB_CLK_ENABLE();
   __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
 
   /*Configure GPIO pin Output Level */
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13, GPIO_PIN_RESET);
+  HAL_GPIO_WritePin(GPIOA, GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3, GPIO_PIN_RESET);
 
-  /*Configure GPIO pins : PB12 PB13 */
-  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13;
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15, GPIO_PIN_RESET);
+
+  /*Configure GPIO pins : PA0 PA1 PA2 PA3 */
+  GPIO_InitStruct.Pin = GPIO_PIN_0|GPIO_PIN_1|GPIO_PIN_2|GPIO_PIN_3;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : PB12 PB13 PB14 PB15 */
+  GPIO_InitStruct.Pin = GPIO_PIN_12|GPIO_PIN_13|GPIO_PIN_14|GPIO_PIN_15;
   GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
@@ -312,37 +379,316 @@ static void uart_puts(const char *text)
                     HAL_MAX_DELAY);
 }
 
-static void motor_stop(void)
+static int32_t abs_i32(int32_t value)
 {
-  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 0);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
-  motor_is_running = 0;
+  return (value < 0) ? -value : value;
 }
 
-static void motor_forward(void)
+static void motor_output(MotorConfig_t *motor, int16_t pwm)
 {
-  motor_stop();
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_SET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_RESET);
-  HAL_Delay(5);
+  uint8_t forward;
+  uint16_t compare;
 
-  /* 100 / 400 = 25% duty cycle. */
-  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 100);
-  motor_start_tick = HAL_GetTick();
-  motor_is_running = 1;
+  if (pwm == 0)
+  {
+    __HAL_TIM_SET_COMPARE(&htim4, motor->pwm_channel, 0);
+    HAL_GPIO_WritePin(motor->in1_port, motor->in1_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(motor->in2_port, motor->in2_pin, GPIO_PIN_RESET);
+    return;
+  }
+
+  forward = (pwm > 0) ? 1U : 0U;
+  if (motor->inverted != 0U)
+  {
+    forward = !forward;
+  }
+
+  if (forward != 0U)
+  {
+    HAL_GPIO_WritePin(motor->in1_port, motor->in1_pin, GPIO_PIN_SET);
+    HAL_GPIO_WritePin(motor->in2_port, motor->in2_pin, GPIO_PIN_RESET);
+  }
+  else
+  {
+    HAL_GPIO_WritePin(motor->in1_port, motor->in1_pin, GPIO_PIN_RESET);
+    HAL_GPIO_WritePin(motor->in2_port, motor->in2_pin, GPIO_PIN_SET);
+  }
+
+  compare = (uint16_t)abs_i32(pwm);
+  if (compare > PWM_MAX_VALUE)
+  {
+    compare = PWM_MAX_VALUE;
+  }
+  __HAL_TIM_SET_COMPARE(&htim4, motor->pwm_channel, compare);
 }
 
-static void motor_reverse(void)
+static void motors_hard_stop(void)
 {
-  motor_stop();
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_12, GPIO_PIN_RESET);
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_13, GPIO_PIN_SET);
-  HAL_Delay(5);
+  uint8_t index;
 
-  __HAL_TIM_SET_COMPARE(&htim4, TIM_CHANNEL_1, 100);
-  motor_start_tick = HAL_GetTick();
-  motor_is_running = 1;
+  for (index = 0U; index < 4U; index++)
+  {
+    motors[index].current_pwm = 0;
+    target_pwm[index] = 0;
+    motor_output(&motors[index], 0);
+  }
+}
+
+static void motors_ramp(void)
+{
+  uint8_t index;
+  int16_t current;
+  int16_t target;
+
+  for (index = 0U; index < 4U; index++)
+  {
+    current = motors[index].current_pwm;
+    target = target_pwm[index];
+
+    if (current < target)
+    {
+      current = (int16_t)((target - current > PWM_RAMP_STEP)
+                          ? current + PWM_RAMP_STEP : target);
+    }
+    else if (current > target)
+    {
+      current = (int16_t)((current - target > PWM_RAMP_STEP)
+                          ? current - PWM_RAMP_STEP : target);
+    }
+
+    if (current != motors[index].current_pwm)
+    {
+      motors[index].current_pwm = current;
+      motor_output(&motors[index], current);
+    }
+  }
+}
+
+static void set_motion(int16_t vx, int16_t vy, int16_t wz)
+{
+  int32_t wheel[4];
+  int32_t max_wheel = 0;
+  int32_t speed;
+  uint8_t index;
+
+  motion_vx = vx;
+  motion_vy = vy;
+  motion_wz = wz;
+
+  vx = (int16_t)((int32_t)vx * speed_percent / 100);
+  vy = (int16_t)((int32_t)vy * speed_percent / 100);
+  wz = (int16_t)((int32_t)wz * speed_percent / 100);
+
+  /*
+   * Standard X mecanum layout:
+   * FL = forward + right - CCW
+   * FR = forward - right + CCW
+   * RL = forward - right - CCW
+   * RR = forward + right + CCW
+   */
+  wheel[0] = (int32_t)vx + vy - wz;
+  wheel[1] = (int32_t)vx - vy + wz;
+  wheel[2] = (int32_t)vx - vy - wz;
+  wheel[3] = (int32_t)vx + vy + wz;
+
+  for (index = 0U; index < 4U; index++)
+  {
+    if (abs_i32(wheel[index]) > max_wheel)
+    {
+      max_wheel = abs_i32(wheel[index]);
+    }
+  }
+
+  if (max_wheel > 100)
+  {
+    for (index = 0U; index < 4U; index++)
+    {
+      wheel[index] = wheel[index] * 100 / max_wheel;
+    }
+  }
+
+  for (index = 0U; index < 4U; index++)
+  {
+    speed = wheel[index] * motors[index].trim_percent / 100;
+    if (speed > 100)
+    {
+      speed = 100;
+    }
+    else if (speed < -100)
+    {
+      speed = -100;
+    }
+
+    target_pwm[index] = (int16_t)(speed * PWM_MAX_VALUE / 100);
+    if ((target_pwm[index] != 0) &&
+        (abs_i32(target_pwm[index]) < PWM_MIN_RUN))
+    {
+      target_pwm[index] = (target_pwm[index] > 0)
+                          ? PWM_MIN_RUN : -PWM_MIN_RUN;
+    }
+  }
+}
+
+static void start_motion(int16_t vx, int16_t vy, int16_t wz)
+{
+  set_motion(vx, vy, wz);
+  motion_active = 1U;
+  motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
+}
+
+static void process_command(uint8_t byte)
+{
+  uint8_t command;
+
+  if (vector_collecting != 0U)
+  {
+    if ((byte == '\n') || (byte == '\r'))
+    {
+      vector_buffer[vector_length] = '\0';
+      vector_collecting = 0U;
+      process_vector();
+    }
+    else if (vector_length < (VECTOR_BUFFER_SIZE - 1U))
+    {
+      vector_buffer[vector_length++] = (char)byte;
+    }
+    else
+    {
+      vector_collecting = 0U;
+      uart_puts("ERR vector too long\r\n");
+    }
+    return;
+  }
+
+  command = (uint8_t)((byte >= 'a' && byte <= 'z') ? byte - 32U : byte);
+
+  switch (command)
+  {
+    case 'F': start_motion(100, 0, 0);    uart_puts("F\r\n"); break;
+    case 'B': start_motion(-100, 0, 0);   uart_puts("B\r\n"); break;
+    case 'L': start_motion(0, -100, 0);   uart_puts("L\r\n"); break;
+    case 'R': start_motion(0, 100, 0);    uart_puts("R\r\n"); break;
+    case 'Q': start_motion(0, 0, 100);    uart_puts("Q\r\n"); break;
+    case 'E': start_motion(0, 0, -100);   uart_puts("E\r\n"); break;
+    case 'G': start_motion(71, -71, 0);   uart_puts("FL\r\n"); break;
+    case 'I': start_motion(71, 71, 0);    uart_puts("FR\r\n"); break;
+    case 'H': start_motion(-71, -71, 0);  uart_puts("BL\r\n"); break;
+    case 'J': start_motion(-71, 71, 0);   uart_puts("BR\r\n"); break;
+    case 'K':
+      if (motion_active != 0U)
+      {
+        motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
+      }
+      break;
+    case 'S':
+      motion_active = 0U;
+      motion_vx = 0;
+      motion_vy = 0;
+      motion_wz = 0;
+      motors_hard_stop();
+      uart_puts("STOP\r\n");
+      break;
+    case '+':
+      if (speed_percent < MAX_SPEED_PERCENT)
+      {
+        speed_percent = (uint8_t)(speed_percent + SPEED_STEP_PERCENT);
+        if (speed_percent > MAX_SPEED_PERCENT)
+        {
+          speed_percent = MAX_SPEED_PERCENT;
+        }
+      }
+      if (motion_active != 0U)
+      {
+        set_motion(motion_vx, motion_vy, motion_wz);
+        motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
+      }
+      uart_puts((speed_percent == 100U) ? "SPD=100\r\n" : "SPD+\r\n");
+      break;
+    case '-':
+      if (speed_percent > MIN_SPEED_PERCENT)
+      {
+        speed_percent = (uint8_t)(speed_percent - SPEED_STEP_PERCENT);
+        if (speed_percent < MIN_SPEED_PERCENT)
+        {
+          speed_percent = MIN_SPEED_PERCENT;
+        }
+      }
+      if (motion_active != 0U)
+      {
+        set_motion(motion_vx, motion_vy, motion_wz);
+        motion_deadline = HAL_GetTick() + MOTION_TIMEOUT_MS;
+      }
+      uart_puts((speed_percent == 20U) ? "SPD=20\r\n" : "SPD-\r\n");
+      break;
+    case 'V':
+      vector_length = 0U;
+      vector_collecting = 1U;
+      break;
+    default:
+      break;
+  }
+}
+
+static uint8_t parse_int16(const char **cursor, int16_t *value)
+{
+  int32_t result = 0;
+  int8_t sign = 1;
+  uint8_t has_digit = 0U;
+
+  while ((**cursor == ' ') || (**cursor == ','))
+  {
+    (*cursor)++;
+  }
+  if (**cursor == '-')
+  {
+    sign = -1;
+    (*cursor)++;
+  }
+  while ((**cursor >= '0') && (**cursor <= '9'))
+  {
+    has_digit = 1U;
+    result = (result * 10) + (**cursor - '0');
+    if (result > 1000)
+    {
+      return 0U;
+    }
+    (*cursor)++;
+  }
+  if (has_digit == 0U)
+  {
+    return 0U;
+  }
+
+  result *= sign;
+  if (result > 100)
+  {
+    result = 100;
+  }
+  else if (result < -100)
+  {
+    result = -100;
+  }
+  *value = (int16_t)result;
+  return 1U;
+}
+
+static void process_vector(void)
+{
+  const char *cursor = vector_buffer;
+  int16_t vx;
+  int16_t vy;
+  int16_t wz;
+
+  if ((parse_int16(&cursor, &vx) == 0U) ||
+      (parse_int16(&cursor, &vy) == 0U) ||
+      (parse_int16(&cursor, &wz) == 0U))
+  {
+    uart_puts("ERR V,fwd,right,ccw\r\n");
+    return;
+  }
+
+  start_motion(vx, vy, wz);
+  uart_puts("V OK\r\n");
 }
 /* USER CODE END 4 */
 
