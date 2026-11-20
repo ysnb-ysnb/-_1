@@ -11,10 +11,10 @@ from __future__ import annotations
 import math
 
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QMouseEvent, QPainter, QPen, QRadialGradient
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPen, QRadialGradient
 from PySide6.QtWidgets import QWidget
 
-from .theme import ACCENT, BORDER, DANGER, PANEL, PANEL_ALT, TEXT, TEXT_DIM
+from .theme import ACCENT, BORDER, DANGER, PANEL, PANEL_ALT, TEXT_DIM, ui_font
 
 
 class Joystick(QWidget):
@@ -158,11 +158,11 @@ class Joystick(QWidget):
         )
 
         painter.setPen(QPen(TEXT_DIM))
-        painter.setFont(QFont("Segoe UI", 8))
-        self._draw_label(painter, centre, radius, "FWD", -90)
-        self._draw_label(painter, centre, radius, "BACK", 90)
-        self._draw_label(painter, centre, radius, "LEFT", 180)
-        self._draw_label(painter, centre, radius, "RIGHT", 0)
+        painter.setFont(ui_font(8))
+        self._draw_label(painter, centre, radius, "前进", -90)
+        self._draw_label(painter, centre, radius, "后退", 90)
+        self._draw_label(painter, centre, radius, "左移", 180)
+        self._draw_label(painter, centre, radius, "右移", 0)
 
         # Command vector, which may differ from the pointer once shaping and
         # filtering are applied.
@@ -188,8 +188,8 @@ class Joystick(QWidget):
 
         # Hint text.
         painter.setPen(QPen(TEXT_DIM))
-        painter.setFont(QFont("Segoe UI", 8))
-        hint = "LOCKED" if self._locked else "drag to drive"
+        painter.setFont(ui_font(8))
+        hint = "已锁定" if self._locked else "按住拖动驾驶"
         painter.drawText(
             QRectF(0, self.height() - 22, self.width(), 18),
             Qt.AlignmentFlag.AlignCenter,
@@ -209,8 +209,10 @@ class Joystick(QWidget):
             centre.x() + math.cos(angle) * (radius - 12),
             centre.y() + math.sin(angle) * (radius - 12),
         )
+        # Generous width: two CJK glyphs are about 24 px at this size, so a
+        # narrow box would clip them.
         painter.drawText(
-            QRectF(point.x() - 26, point.y() - 8, 52, 16),
+            QRectF(point.x() - 34, point.y() - 9, 68, 18),
             Qt.AlignmentFlag.AlignCenter,
             text,
         )

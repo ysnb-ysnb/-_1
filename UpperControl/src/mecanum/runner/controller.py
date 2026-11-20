@@ -122,7 +122,7 @@ class Controller:
         self._unacked_since = None
         self._estop_latched = False
         self._fault_latched = False
-        self.stats = LinkStats(state=DriveState.READY, message="connected")
+        self.stats = LinkStats(state=DriveState.READY, message="已连接")
 
         # Never assume the chassis is stationary: a previous session may
         # have left it driving.
@@ -143,7 +143,7 @@ class Controller:
         self._open = False
         self._pending = None
         self.stats.state = DriveState.DISCONNECTED
-        self.stats.message = "disconnected"
+        self.stats.message = "已断开"
 
     @property
     def is_open(self) -> bool:
@@ -171,7 +171,7 @@ class Controller:
         if not self._open:
             return
         self.stats.state = DriveState.ESTOP
-        self.stats.message = "emergency stop"
+        self.stats.message = "急停已触发"
         self._write(encode_stop(), None, self._clock())
 
     def clear_estop(self) -> None:
@@ -183,7 +183,7 @@ class Controller:
         self._unacked_since = None
         self.stats.state = DriveState.READY
         self.stats.last_sent_at = 0.0
-        self.stats.message = "e-stop cleared"
+        self.stats.message = "急停已解除"
 
     def clear_fault(self) -> None:
         """Leave the FAULT state after the operator intervenes."""
@@ -194,7 +194,7 @@ class Controller:
         self._unacked_since = None
         self.stats.state = DriveState.READY
         self.stats.last_sent_at = 0.0
-        self.stats.message = "fault cleared"
+        self.stats.message = "故障已解除"
 
     def stop_now(self) -> None:
         """Send a hard stop without changing the state machine."""
@@ -247,7 +247,7 @@ class Controller:
             if self.stats.state is DriveState.FAULT and not self._estop_latched:
                 self._fault_latched = False
                 self.stats.state = DriveState.READY
-                self.stats.message = "link recovered"
+                self.stats.message = "链路已恢复"
             return
 
         if kind is ResponseKind.TIMEOUT:
@@ -256,12 +256,12 @@ class Controller:
             self.stats.timeout_count += 1
             self.stats.last_ack_at = 0.0
             self._pending = None
-            self._enter_fault("board timed out: commands not arriving")
+            self._enter_fault("固件超时：指令没有送达")
             return
 
         if kind is ResponseKind.ERROR:
             self.stats.error_count += 1
-            self.stats.message = f"board rejected command: {response.raw}"
+            self.stats.message = f"固件拒绝了指令：{response.raw}"
 
     def _maybe_send(self, now: float) -> None:
         if self._estop_latched or self._fault_latched:
@@ -275,7 +275,7 @@ class Controller:
         # never be declared faulty and would just transmit forever.
         if self._unacked_since is not None:
             if now - self._unacked_since >= self._config.fault_s:
-                self._enter_fault("no acknowledgement")
+                self._enter_fault("收不到回执")
                 return
 
         if self._pending is not None:

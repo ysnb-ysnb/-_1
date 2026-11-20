@@ -10,10 +10,10 @@ combined with translation.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt
-from PySide6.QtGui import QFont, QPainter, QPen
+from PySide6.QtGui import QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from .theme import ACCENT, BORDER, DANGER, OK, PANEL_ALT, TEXT, TEXT_DIM, WARN
+from .theme import ACCENT, BORDER, DANGER, OK, PANEL_ALT, TEXT, TEXT_DIM, WARN, mono_font, ui_font
 
 PWM_MAX = 399
 PWM_FLOOR = 60
@@ -65,7 +65,7 @@ class WheelBars(QWidget):
             pwm = self._pwm[index]
 
             painter.setPen(QPen(TEXT_DIM))
-            painter.setFont(QFont("Cascadia Mono", 9))
+            painter.setFont(mono_font(9))
             painter.drawText(
                 QRectF(0, top, label_width, row_height),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft,
@@ -107,7 +107,7 @@ class WheelBars(QWidget):
                 painter.drawRoundedRect(bar, 4, 4)
 
             painter.setPen(QPen(TEXT))
-            painter.setFont(QFont("Cascadia Mono", 9))
+            painter.setFont(mono_font(9))
             painter.drawText(
                 QRectF(self.width() - value_width, top, value_width, row_height),
                 Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignRight,
@@ -116,10 +116,9 @@ class WheelBars(QWidget):
 
         if has_loss:
             painter.setPen(QPen(WARN))
-            painter.setFont(QFont("Segoe UI", 8))
+            painter.setFont(ui_font(8))
             painter.drawText(
                 QRectF(0, self.height() - 18, self.width(), 16),
                 Qt.AlignmentFlag.AlignLeft,
-                f"normalisation loss {self._loss * 100:.0f}%  "
-                f"(rotation is stealing translation speed)",
+                f"归一化损失 {self._loss * 100:.0f}%（旋转正在抵消平移速度）",
             )

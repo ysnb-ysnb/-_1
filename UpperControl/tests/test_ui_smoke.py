@@ -32,7 +32,7 @@ def window(qapp):
 
 
 def test_window_builds(window):
-    assert window.windowTitle() == "Mecanum Upper Control"
+    assert window.windowTitle() == "麦轮小车 上位机"
     assert window._joystick is not None
     assert window._wheels is not None
 

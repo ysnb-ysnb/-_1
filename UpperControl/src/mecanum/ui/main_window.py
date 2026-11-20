@@ -38,19 +38,19 @@ TICK_MS = 16
 """UI and control tick, about 60 Hz."""
 
 STATE_TEXT = {
-    DriveState.DISCONNECTED: ("DISCONNECTED", TEXT_DIM),
-    DriveState.CONNECTING: ("CONNECTING", WARN),
-    DriveState.READY: ("READY", OK),
-    DriveState.DRIVING: ("DRIVING", OK),
-    DriveState.FAULT: ("FAULT", WARN),
-    DriveState.ESTOP: ("E-STOP", DANGER),
+    DriveState.DISCONNECTED: ("未连接", TEXT_DIM),
+    DriveState.CONNECTING: ("连接中", WARN),
+    DriveState.READY: ("就绪", OK),
+    DriveState.DRIVING: ("行驶中", OK),
+    DriveState.FAULT: ("故障", WARN),
+    DriveState.ESTOP: ("急停", DANGER),
 }
 
 
 class MainWindow(QMainWindow):
     def __init__(self, simulate: bool = False) -> None:
         super().__init__()
-        self.setWindowTitle("Mecanum Upper Control")
+        self.setWindowTitle("麦轮小车 上位机")
         self.setMinimumSize(1020, 720)
 
         self._rotation_key = RampAxis(ramp_s=0.30)
@@ -101,11 +101,11 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         bar = self.statusBar()
-        self._status_label = QLabel("not connected")
+        self._status_label = QLabel("未连接")
         bar.addWidget(self._status_label)
 
     def _build_link_panel(self) -> QGroupBox:
-        box = QGroupBox("Link")
+        box = QGroupBox("连接")
         outer = QVBoxLayout(box)
         outer.setSpacing(8)
 
@@ -114,29 +114,28 @@ class MainWindow(QMainWindow):
         self._port_combo.setMinimumWidth(280)
         row.addWidget(self._port_combo, 1)
 
-        self._refresh_button = QPushButton("Refresh")
+        self._refresh_button = QPushButton("刷新")
         self._refresh_button.clicked.connect(self._refresh_ports)
         row.addWidget(self._refresh_button)
         outer.addLayout(row)
 
         row2 = QHBoxLayout()
-        self._connect_button = QPushButton("Connect")
+        self._connect_button = QPushButton("连接")
         self._connect_button.clicked.connect(self._toggle_connection)
         row2.addWidget(self._connect_button)
 
-        self._sim_check = QCheckBox("Simulator")
+        self._sim_check = QCheckBox("模拟器")
         self._sim_check.setChecked(self._simulate)
         self._sim_check.setToolTip(
-            "Drive a simulated chassis instead of a serial port, so the "
-            "control chain can be exercised without hardware."
+            "用模拟小车代替串口，不接硬件也能调试整条控制链。"
         )
         row2.addWidget(self._sim_check)
         row2.addStretch(1)
         outer.addLayout(row2)
 
         hint = QLabel(
-            "Bluetooth SPP exposes two COM ports and only the outbound one works. "
-            "Ports are marked BT; try the other one if nothing answers."
+            "蓝牙串口配对后会生成两个 COM 口，只有出站口能用。"
+            "列表中带「蓝牙」标记的是蓝牙口，连不上就换另一个试。"
         )
         hint.setWordWrap(True)
         hint.setProperty("role", "dim")
@@ -145,7 +144,7 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_drive_panel(self) -> QGroupBox:
-        box = QGroupBox("Drive")
+        box = QGroupBox("驾驶")
         layout = QHBoxLayout(box)
         layout.setSpacing(16)
 
@@ -162,18 +161,18 @@ class MainWindow(QMainWindow):
         self._rotation.value_changed.connect(self._on_rotation_slider)
         side.addWidget(self._rotation, 1)
 
-        keys = QLabel("Q / E rotate")
+        keys = QLabel("Q / E 自转")
         keys.setAlignment(Qt.AlignmentFlag.AlignCenter)
         keys.setProperty("role", "dim")
         side.addWidget(keys)
 
-        self._estop_button = QPushButton("EMERGENCY STOP")
+        self._estop_button = QPushButton("急 停")
         self._estop_button.setProperty("role", "danger")
         self._estop_button.setMinimumHeight(56)
         self._estop_button.clicked.connect(self._on_estop)
         side.addWidget(self._estop_button)
 
-        self._clear_button = QPushButton("Clear")
+        self._clear_button = QPushButton("解除")
         self._clear_button.clicked.connect(self._on_clear)
         side.addWidget(self._clear_button)
 
@@ -181,11 +180,11 @@ class MainWindow(QMainWindow):
         return box
 
     def _build_status_panel(self) -> QGroupBox:
-        box = QGroupBox("Status")
+        box = QGroupBox("状态")
         grid = QGridLayout(box)
         grid.setSpacing(6)
 
-        self._state_label = QLabel("DISCONNECTED")
+        self._state_label = QLabel("未连接")
         self._state_label.setProperty("role", "heading")
         grid.addWidget(self._state_label, 0, 0, 1, 2)
 
@@ -194,11 +193,16 @@ class MainWindow(QMainWindow):
         self._message_label.setWordWrap(True)
         grid.addWidget(self._message_label, 1, 0, 1, 2)
 
-        self._cmd_label = self._add_readout(grid, 2, "command")
-        self._rtt_label = self._add_readout(grid, 3, "round trip")
-        self._ack_label = self._add_readout(grid, 4, "acks")
-        self._tx_label = self._add_readout(grid, 5, "sent")
-        self._rx_label = self._add_readout(grid, 6, "last reply")
+        self._cmd_label = self._add_readout(grid, 2, "指令")
+        self._rtt_label = self._add_readout(grid, 3, "往返延迟")
+        self._ack_label = self._add_readout(grid, 4, "回执")
+        self._tx_label = self._add_readout(grid, 5, "已发送")
+        self._rx_label = self._add_readout(grid, 6, "最近回复")
+
+        # The command readout holds three signed values, so it needs more
+        # room than the counters to avoid being clipped.
+        grid.setColumnMinimumWidth(1, 150)
+        grid.setColumnStretch(1, 1)
 
         return box
 
@@ -214,18 +218,18 @@ class MainWindow(QMainWindow):
         return value
 
     def _build_wheels_panel(self) -> QGroupBox:
-        box = QGroupBox("Wheels (predicted PWM)")
+        box = QGroupBox("四轮 PWM（预测）")
         layout = QVBoxLayout(box)
         self._wheels = WheelBars()
         layout.addWidget(self._wheels)
         return box
 
     def _build_limits_panel(self) -> QGroupBox:
-        box = QGroupBox("Limits")
+        box = QGroupBox("限速")
         grid = QGridLayout(box)
         grid.setSpacing(8)
 
-        grid.addWidget(self._dim("translation"), 0, 0)
+        grid.addWidget(self._dim("平移"), 0, 0)
         self._speed_slider = QSlider(Qt.Orientation.Horizontal)
         self._speed_slider.setRange(5, 100)
         self._speed_slider.setValue(int(self._config.speed_limit * 100))
@@ -234,7 +238,7 @@ class MainWindow(QMainWindow):
         self._speed_value = self._value_label(f"{self._speed_slider.value()}%")
         grid.addWidget(self._speed_value, 0, 2)
 
-        grid.addWidget(self._dim("rotation"), 1, 0)
+        grid.addWidget(self._dim("旋转"), 1, 0)
         self._rot_slider = QSlider(Qt.Orientation.Horizontal)
         self._rot_slider.setRange(5, 100)
         self._rot_slider.setValue(int(self._config.rotation_limit * 100))
@@ -243,7 +247,7 @@ class MainWindow(QMainWindow):
         self._rot_value = self._value_label(f"{self._rot_slider.value()}%")
         grid.addWidget(self._rot_value, 1, 2)
 
-        grid.addWidget(self._dim("filter"), 2, 0)
+        grid.addWidget(self._dim("滤波"), 2, 0)
         self._tau_slider = QSlider(Qt.Orientation.Horizontal)
         self._tau_slider.setRange(0, 200)
         self._tau_slider.setValue(int(self._config.filter_tau * 1000))
@@ -277,7 +281,7 @@ class MainWindow(QMainWindow):
             self._port_combo.addItem(info.label(), info)
 
         if not ports:
-            self._port_combo.addItem("no serial ports found", None)
+            self._port_combo.addItem("未找到串口", None)
 
         if current is not None:
             for index in range(self._port_combo.count()):
@@ -328,11 +332,11 @@ class MainWindow(QMainWindow):
             return
 
         self._connected = True
-        self._connect_button.setText("Disconnect")
+        self._connect_button.setText("断开")
         self._port_combo.setEnabled(False)
         self._refresh_button.setEnabled(False)
         self._sim_check.setEnabled(False)
-        self._status_label.setText("connected")
+        self._status_label.setText("已连接")
         self.setFocus()
 
     def _disconnect(self) -> None:
@@ -340,11 +344,11 @@ class MainWindow(QMainWindow):
             self._controller.close()
             self._controller = None
         self._connected = False
-        self._connect_button.setText("Connect")
+        self._connect_button.setText("连接")
         self._port_combo.setEnabled(True)
         self._refresh_button.setEnabled(True)
         self._sim_check.setEnabled(True)
-        self._status_label.setText("not connected")
+        self._status_label.setText("未连接")
 
         # Never leave the stick visually deflected after a disconnect.
         self._rotation_key.reset()
@@ -401,9 +405,9 @@ class MainWindow(QMainWindow):
         if response.kind is ResponseKind.TIMEOUT:
             # The board stopped itself, so the operator needs to know the
             # commands are not arriving rather than just seeing a stop.
-            self._set_message("board reported a timeout: commands not arriving")
+            self._set_message("固件报告超时：指令没有送达")
         elif response.kind is ResponseKind.ERROR:
-            self._set_message(f"board rejected a command: {response.raw}")
+            self._set_message(f"固件拒绝了指令：{response.raw}")
 
     # ------------------------------------------------------------ key events
 
@@ -506,7 +510,7 @@ class MainWindow(QMainWindow):
         self._message_label.setText(stats.message)
 
         if stats.last_sent is None:
-            self._cmd_label.setText("stop")
+            self._cmd_label.setText("停止")
         else:
             vector = stats.last_sent
             self._cmd_label.setText(f"{vector.forward:+d} {vector.right:+d} {vector.ccw:+d}")

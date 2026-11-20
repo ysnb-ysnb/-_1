@@ -24,7 +24,7 @@ class PortInfo:
     is_bluetooth: bool
 
     def label(self) -> str:
-        mark = "BT" if self.is_bluetooth else "--"
+        mark = "蓝牙" if self.is_bluetooth else "串口"
         return f"[{mark}] {self.device} — {self.description}"
 
 

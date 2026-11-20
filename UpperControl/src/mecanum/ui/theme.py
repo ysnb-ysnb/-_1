@@ -20,6 +20,7 @@ STYLESHEET = f"""
 QWidget {{
     background-color: {BG.name()};
     color: {TEXT.name()};
+    font-family: "Microsoft YaHei UI", "Microsoft YaHei", sans-serif;
     font-size: 13px;
 }}
 QGroupBox {{
@@ -110,8 +111,7 @@ def apply_theme(app: QApplication) -> None:
 
     app.setStyleSheet(STYLESHEET)
 
-    font = QFont("Segoe UI", 9)
-    app.setFont(font)
+    app.setFont(ui_font(9))
 
 
 def hex_of(colour: QColor | str) -> str:
@@ -126,8 +126,25 @@ def hex_of(colour: QColor | str) -> str:
     return colour
 
 
-def mono_font(size: int = 10) -> QFont:
-    """Monospaced font for numeric readouts, where digits must not shift."""
+def ui_font(size: int = 9) -> QFont:
+    """Font for Chinese UI text.
+
+    "Segoe UI" has no CJK glyphs, so using it for Chinese renders every
+    character as a box. Microsoft YaHei UI ships with Windows and covers
+    both.
+    """
+    font = QFont("Microsoft YaHei UI", size)
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    return font
+
+
+def mono_font(size: int = 9) -> QFont:
+    """Monospaced font for numeric readouts.
+
+    Cascadia Mono is Latin-only, which is exactly what is wanted here:
+    every string drawn with it is a number, a wheel name or a protocol
+    token, so digits stay column-aligned. Chinese text must not use it.
+    """
     font = QFont("Cascadia Mono", size)
     font.setStyleHint(QFont.StyleHint.Monospace)
     return font

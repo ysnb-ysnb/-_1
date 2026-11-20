@@ -233,7 +233,7 @@ class TestFault:
         link.push(b"V OK\r\n")
         ctrl.tick()
         assert ctrl.state is DriveState.DRIVING
-        assert ctrl.stats.message == "link recovered"
+        assert ctrl.stats.message == "链路已恢复"
 
 
 class TestEmergencyStop:

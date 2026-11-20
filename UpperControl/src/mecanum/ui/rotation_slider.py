@@ -9,10 +9,10 @@ capability worth demonstrating on a mecanum chassis.
 from __future__ import annotations
 
 from PySide6.QtCore import QRectF, Qt, Signal
-from PySide6.QtGui import QFont, QMouseEvent, QPainter, QPen
+from PySide6.QtGui import QMouseEvent, QPainter, QPen
 from PySide6.QtWidgets import QWidget
 
-from .theme import ACCENT, BORDER, OK, PANEL_ALT, TEXT, TEXT_DIM, WARN
+from .theme import ACCENT, BORDER, OK, PANEL_ALT, TEXT, TEXT_DIM, WARN, mono_font, ui_font
 
 
 class RotationSlider(QWidget):
@@ -133,20 +133,20 @@ class RotationSlider(QWidget):
         # Labels, placed at the true extents so they do not drift as the
         # widget is resized.
         painter.setPen(QPen(TEXT_DIM))
-        painter.setFont(QFont("Segoe UI", 8))
+        painter.setFont(ui_font(8))
         painter.drawText(
-            QRectF(0, centre_y - span - 22, self.width(), 16),
+            QRectF(0, centre_y - span - 24, self.width(), 18),
             Qt.AlignmentFlag.AlignCenter,
-            "CCW",
+            "逆时针",
         )
         painter.drawText(
-            QRectF(0, centre_y + span + 6, self.width(), 16),
+            QRectF(0, centre_y + span + 6, self.width(), 18),
             Qt.AlignmentFlag.AlignCenter,
-            "CW",
+            "顺时针",
         )
 
         painter.setPen(QPen(TEXT if self._command else TEXT_DIM))
-        painter.setFont(QFont("Cascadia Mono", 11))
+        painter.setFont(mono_font(11))
         painter.drawText(
             QRectF(0, self.height() - 26, self.width(), 22),
             Qt.AlignmentFlag.AlignCenter,
